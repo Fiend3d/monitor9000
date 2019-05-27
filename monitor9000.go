@@ -13,8 +13,9 @@ import (
 
 // program implements svc.Service
 type program struct {
-	wg   sync.WaitGroup
-	quit chan struct{}
+	wg        sync.WaitGroup
+	quit      chan struct{}
+	isService bool
 }
 
 func main() {
@@ -27,7 +28,9 @@ func main() {
 }
 
 func (p *program) Init(env svc.Environment) error {
-	log.Printf("is win service? %v\n", env.IsWindowsService())
+	isService := env.IsWindowsService()
+	log.Printf("is win service? %v\n", isService)
+	p.isService = isService
 	return nil
 }
 
@@ -114,7 +117,7 @@ func (p *program) Start() error {
 						_ = message // not the prettiest thing in the world
 						log.Println("Quit signal received...")
 						p.wg.Done()
-						return 
+						return
 					default:
 						time.Sleep(500 * time.Millisecond)
 						cpuUsage, err := cpu.Percent(0, false)
@@ -122,7 +125,10 @@ func (p *program) Start() error {
 							log.Fatal("Something incredible happened:", err)
 						}
 
-						log.Println("Percent:", cpuUsage[0])
+						if !p.isService {
+							log.Println("Percent:", cpuUsage[0])
+						}
+
 						cpuPercent := max(min(int64(cpuUsage[0]*2.55), 255), 0)
 
 						err = send(port, "0", strconv.FormatInt(cpuPercent, 10))
