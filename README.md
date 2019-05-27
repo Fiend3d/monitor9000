@@ -8,3 +8,9 @@ This makes ancient Soviet ammeter display CPU load using Arduino. It can potenti
 ```
 pip install -r requirements.txt
 ```
+
+It can work as a windows service
+```
+go build 
+sc create Monitor9000 binpath= "D:\projects\git\monitor9000\monitor9000.exe"
+```
