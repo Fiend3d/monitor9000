@@ -69,76 +69,71 @@ func (p *program) Start() error {
 
 	p.quit = make(chan struct{})
 
-	p.wg.Add(2)
+	p.wg.Add(1)
+
 	go func() {
 		log.Println("Starting...")
 
-		go func() {
-			for {
-				func() { // this is for defer to work correctly
-					defer time.Sleep(2000 * time.Millisecond)
+		for {
+			func() { // this makes defer work correctly
+				defer time.Sleep(2000 * time.Millisecond)
 
-					ports, err := serial.GetPortsList()
-					if err != nil {
-						log.Println(err)
-						return
-					}
+				ports, err := serial.GetPortsList()
+				if err != nil {
+					log.Println(err)
+					return
+				}
 
-					log.Println("Available ports:", ports)
-					if len(ports) <= 1 {
-						log.Println("Not enough serial ports")
-						return
-					}
+				log.Println("Available ports:", ports)
+				if len(ports) <= 1 {
+					log.Println("Not enough serial ports")
+					return
+				}
 
-					mode := &serial.Mode{
-						BaudRate: 9600,
-					}
+				mode := &serial.Mode{
+					BaudRate: 9600,
+				}
 
-					port, err := serial.OpenPort(ports[len(ports)-1], mode)
-					if err != nil {
-						log.Println(err)
-						return
-					}
+				port, err := serial.OpenPort(ports[len(ports)-1], mode)
+				if err != nil {
+					log.Println(err)
+					return
+				}
 
-					defer port.Close()
+				defer port.Close()
 
-					time.Sleep(5000 * time.Millisecond)
-					send(port, "1", "255")
+				time.Sleep(5000 * time.Millisecond)
+				send(port, "1", "255")
 
-					cpu.Percent(0, false) // just so it works
+				cpu.Percent(0, false) // just so it works
 
-				forever:
-					for {
-						select {
-						case message := <-p.quit:
-							_ = message // not the prettiest thing in the world
-							log.Println("Stopping loop...")
-							p.wg.Done()
-							return
-						default:
-							time.Sleep(500 * time.Millisecond)
-							cpuUsage, err := cpu.Percent(0, false)
-							if err != nil {
-								log.Fatal("Something incredible happened:", err)
-							}
+			forever:
+				for {
+					select {
+					case message := <-p.quit:
+						_ = message // not the prettiest thing in the world
+						log.Println("Quit signal received...")
+						p.wg.Done()
+						return 
+					default:
+						time.Sleep(500 * time.Millisecond)
+						cpuUsage, err := cpu.Percent(0, false)
+						if err != nil {
+							log.Fatal("Something incredible happened:", err)
+						}
 
-							log.Println("Percent:", cpuUsage[0])
-							cpuPercent := max(min(int64(cpuUsage[0]*2.55), 255), 0)
+						log.Println("Percent:", cpuUsage[0])
+						cpuPercent := max(min(int64(cpuUsage[0]*2.55), 255), 0)
 
-							err = send(port, "0", strconv.FormatInt(cpuPercent, 10))
-							if err != nil {
-								log.Println("Send failed:", err)
-								break forever
-							}
+						err = send(port, "0", strconv.FormatInt(cpuPercent, 10))
+						if err != nil {
+							log.Println("Send failed:", err)
+							break forever
 						}
 					}
-				}()
-			}
-		}()
-
-		<-p.quit
-		log.Println("Quit signal received...")
-		p.wg.Done()
+				}
+			}()
+		}
 	}()
 
 	return nil
