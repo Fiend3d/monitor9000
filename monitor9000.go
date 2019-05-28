@@ -78,19 +78,19 @@ func (p *program) Start() error {
 		log.Println("Starting...")
 
 		for {
-			func() { // this makes defer work correctly
+			quit := func() bool { // this makes defer work correctly
 				defer time.Sleep(2000 * time.Millisecond)
 
 				ports, err := serial.GetPortsList()
 				if err != nil {
 					log.Println(err)
-					return
+					return false
 				}
 
 				log.Println("Available ports:", ports)
 				if len(ports) <= 1 {
 					log.Println("Not enough serial ports")
-					return
+					return false
 				}
 
 				mode := &serial.Mode{
@@ -100,7 +100,7 @@ func (p *program) Start() error {
 				port, err := serial.OpenPort(ports[len(ports)-1], mode)
 				if err != nil {
 					log.Println(err)
-					return
+					return false
 				}
 
 				defer port.Close()
@@ -117,7 +117,7 @@ func (p *program) Start() error {
 						_ = message // not the prettiest thing in the world
 						log.Println("Quit signal received...")
 						p.wg.Done()
-						return
+						return true
 					default:
 						time.Sleep(500 * time.Millisecond)
 						cpuUsage, err := cpu.Percent(0, false)
@@ -138,7 +138,11 @@ func (p *program) Start() error {
 						}
 					}
 				}
+				return false
 			}()
+			if quit {
+				return
+			}
 		}
 	}()
 
