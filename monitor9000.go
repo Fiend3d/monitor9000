@@ -6,9 +6,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/facchinm/go-serial"
-	"github.com/judwhite/go-svc/svc"
-	"github.com/shirou/gopsutil/cpu"
+	"github.com/judwhite/go-svc"
+	"github.com/shirou/gopsutil/v3/cpu"
+	"go.bug.st/serial"
 )
 
 // program implements svc.Service
@@ -34,7 +34,7 @@ func (p *program) Init(env svc.Environment) error {
 	return nil
 }
 
-func send(port *serial.SerialPort, pin, state string) error {
+func send(port serial.Port, pin, state string) error {
 	_, err := port.Write([]byte(pin + "\n"))
 	if err != nil {
 		return err
@@ -76,77 +76,103 @@ func (p *program) Start() error {
 
 	go func() {
 		log.Println("Starting...")
+		defer p.wg.Done()
 
 		for {
-			quit := func() bool { // this makes defer work correctly
-				defer time.Sleep(2000 * time.Millisecond)
-
-				ports, err := serial.GetPortsList()
-				if err != nil {
-					log.Println(err)
-					return false
-				}
-
-				log.Println("Available ports:", ports)
-				if len(ports) <= 1 {
-					log.Println("Not enough serial ports")
-					return false
-				}
-
-				mode := &serial.Mode{
-					BaudRate: 9600,
-				}
-
-				port, err := serial.OpenPort(ports[len(ports)-1], mode)
-				if err != nil {
-					log.Println(err)
-					return false
-				}
-
-				defer port.Close()
-
-				time.Sleep(5000 * time.Millisecond)
-				send(port, "1", "255")
-
-				cpu.Percent(0, false) // just so it works
-
-			forever:
-				for {
-					select {
-					case message := <-p.quit:
-						_ = message // not the prettiest thing in the world
-						log.Println("Quit signal received...")
-						p.wg.Done()
-						return true
-					default:
-						time.Sleep(500 * time.Millisecond)
-						cpuUsage, err := cpu.Percent(0, false)
-						if err != nil {
-							log.Fatal("Something incredible happened:", err)
-						}
-
-						if !p.isService {
-							log.Println("Percent:", cpuUsage[0])
-						}
-
-						cpuPercent := max(min(int64(cpuUsage[0]*2.55), 255), 0)
-
-						err = send(port, "0", strconv.FormatInt(cpuPercent, 10))
-						if err != nil {
-							log.Println("Send failed:", err)
-							break forever
-						}
-					}
-				}
-				return false
-			}()
-			if quit {
+			select {
+			case <-p.quit:
+				log.Println("Quit signal received...")
 				return
+			default:
+				p.runMonitorLoop()
 			}
 		}
 	}()
 
 	return nil
+}
+
+func (p *program) runMonitorLoop() {
+	defer time.Sleep(2000 * time.Millisecond) // Wait before retrying if connection fails
+
+	ports, err := serial.GetPortsList()
+	if err != nil {
+		log.Println("Error getting ports list:", err)
+		return
+	}
+
+	log.Println("Available ports:", ports)
+	if len(ports) == 0 {
+		log.Println("No serial ports found")
+		return
+	}
+
+	// Use the last available port (you might want to change this logic)
+	portName := ports[len(ports)-1]
+
+	mode := &serial.Mode{
+		BaudRate: 9600,
+		DataBits: 8,
+		StopBits: serial.OneStopBit,
+		Parity:   serial.NoParity,
+	}
+
+	port, err := serial.Open(portName, mode)
+	if err != nil {
+		log.Printf("Error opening port %s: %v\n", portName, err)
+		return
+	}
+	defer port.Close()
+
+	log.Printf("Connected to port: %s\n", portName)
+
+	time.Sleep(2000 * time.Millisecond) // Wait for Arduino to reset
+
+	// Initialize pin 1 to 255
+	if err := send(port, "1", "255"); err != nil {
+		log.Println("Error during initialization:", err)
+		return
+	}
+
+	// Warm up CPU percentage calculation
+	_, err = cpu.Percent(0, false)
+	if err != nil {
+		log.Println("Error initializing CPU stats:", err)
+		return
+	}
+
+	// Main monitoring loop
+	for {
+		select {
+		case <-p.quit:
+			return
+		default:
+			time.Sleep(500 * time.Millisecond)
+
+			cpuUsage, err := cpu.Percent(500*time.Millisecond, false)
+			if err != nil {
+				log.Println("Error getting CPU usage:", err)
+				continue
+			}
+
+			if len(cpuUsage) == 0 {
+				log.Println("No CPU usage data received")
+				continue
+			}
+
+			if !p.isService {
+				log.Printf("CPU Usage: %.2f%%\n", cpuUsage[0])
+			}
+
+			cpuPercent := max(min(int64(cpuUsage[0]*2.55), 255), 0)
+
+			err = send(port, "0", strconv.FormatInt(cpuPercent, 10))
+			if err != nil {
+				log.Println("Send failed, reconnecting:", err)
+				return // Break out of this connection and retry
+			}
+		}
+	}
 }
 
 func (p *program) Stop() error {
